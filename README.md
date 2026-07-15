@@ -4,9 +4,51 @@ Versão resumida do SQEducaPlay. Este repositório contém apenas o necessário 
 
 ## Como executar
 
-1. Instale o Flutter SDK.
-2. Dentro da pasta do projeto, rode `flutter pub get`.
-3. Execute com `flutter run` no dispositivo ou emulador desejado.
+### Checklist de instalação
+
+- [ ] Instalar o **Flutter SDK**.
+- [ ] Instalar o **Git**.
+- [ ] Instalar o **VS Code** ou outro editor compatível.
+- [ ] No Windows, ativar o **Modo de Desenvolvedor**.
+
+### Passo a passo para rodar
+
+1. Clonar o repositório:
+
+```bash
+git clone https://github.com/KeinanSZ/SQEducaPlay-Alunos.git
+```
+
+2. Entrar na pasta do projeto:
+
+```bash
+cd SQEducaPlay-Alunos
+```
+
+3. Baixar as dependências:
+
+```bash
+flutter pub get
+```
+
+4. Verificar a instalação do Flutter:
+
+```bash
+flutter doctor
+```
+
+5. Executar o app:
+
+```bash
+flutter run
+```
+
+### Se algo der errado
+
+- Confirme se o Flutter está no `PATH`.
+- Confira se o dispositivo ou emulador está disponível.
+- No Windows, confirme se o **Modo de Desenvolvedor** está ativado.
+- Rode novamente `flutter pub get` se faltar alguma dependência.
 
 ## Conteúdo incluído
 
@@ -23,4 +65,4 @@ Versão resumida do SQEducaPlay. Este repositório contém apenas o necessário 
 
 ## Observação
 
-Se alguém de vocês forem configurar a execução em Android, pode ser necessário instalar o SDK e aceitar as licenças do Flutter/Android antes de rodar o app.
+Se alguém for executar no Android, pode ser necessário instalar o SDK e aceitar as licenças do Flutter/Android antes de rodar o app.
