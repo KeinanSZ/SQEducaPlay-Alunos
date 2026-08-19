@@ -2,6 +2,8 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:sqeducaplay/models/user_model.dart';
 import 'package:flutter/foundation.dart';
+import '../services/password_service.dart';
+import '../models/teacher_assignment_model.dart';
 
 class AppDatabase {
   static final AppDatabase instance = AppDatabase._init();
@@ -11,6 +13,14 @@ class AppDatabase {
   bool _dbAvailable = true;
   final List<User> _inMemoryUsers = [];
   int _inMemoryNextId = 100000; // ids gerados para usuários em memória
+  final List<Map<String, dynamic>> _inMemoryPartidas = [];
+  int _inMemoryNextPartidaId = 1;
+  final List<Map<String, dynamic>> _inMemoryDailyMissionRewards = [];
+  int _inMemoryNextDailyMissionRewardId = 1;
+  final List<Map<String, dynamic>> _inMemoryQuestionAttempts = [];
+  int _inMemoryNextAttemptId = 1;
+  final List<TeacherAssignment> _inMemoryTeacherAssignments = [];
+  int _inMemoryNextTeacherAssignmentId = 1;
 
   // Detectar se estamos no web: se sim, marcar DB como indisponível para evitar
   // chamadas a sqflite (que não existe no ambiente web) e usar o fallback em memória.
@@ -24,13 +34,62 @@ class AppDatabase {
     return _database!;
   }
 
+  Future<void> _ensureRequiredTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS user_achievements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        userId INTEGER NOT NULL,
+        tipo TEXT NOT NULL,
+        pontos INTEGER NOT NULL DEFAULT 0,
+        data_desbloqueio TEXT NOT NULL,
+        UNIQUE(userId, tipo),
+        FOREIGN KEY (userId) REFERENCES users (id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS user_rankings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        userId INTEGER NOT NULL,
+        position INTEGER NOT NULL,
+        updatedAt TEXT NOT NULL,
+        UNIQUE(userId),
+        FOREIGN KEY (userId) REFERENCES users (id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS teacher_assignments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        teacherId INTEGER NOT NULL,
+        schoolId TEXT NOT NULL,
+        grade TEXT NOT NULL,
+        classGroup TEXT NOT NULL,
+        shift TEXT NOT NULL,
+        schedule TEXT,
+        FOREIGN KEY (teacherId) REFERENCES users (id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS daily_mission_rewards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        reward_date TEXT NOT NULL,
+        stars INTEGER NOT NULL,
+        UNIQUE(user_id, reward_date),
+        FOREIGN KEY (user_id) REFERENCES users (id)
+      )
+    ''');
+  }
+
   Future<Database> _initDB(String filePath) async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
     try {
       return await openDatabase(
         path,
-        version: 2,
+        version: 9,
         onCreate: _createDB,
         onUpgrade: (Database db, int oldVersion, int newVersion) async {
           // Upgrade path: v1 -> v2 add profilePhotoPath column to users
@@ -39,49 +98,80 @@ class AppDatabase {
               await db.execute("ALTER TABLE users ADD COLUMN profilePhotoPath TEXT");
             } catch (_) {}
           }
+          if (oldVersion < 3) {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS quiz_question_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                partida_id INTEGER NOT NULL,
+                usuario_id INTEGER NOT NULL,
+                materia TEXT NOT NULL,
+                ano TEXT NOT NULL,
+                topico TEXT,
+                pergunta TEXT NOT NULL,
+                resposta_selecionada TEXT NOT NULL,
+                resposta_correta TEXT NOT NULL,
+                acertou INTEGER NOT NULL DEFAULT 0,
+                ordem_pergunta INTEGER NOT NULL DEFAULT 0,
+                data_tentativa TEXT NOT NULL,
+                FOREIGN KEY (usuario_id) REFERENCES users (id),
+                FOREIGN KEY (partida_id) REFERENCES partidas (id)
+              )
+            ''');
+          }
+          if (oldVersion < 4) {
+            await _migratePlainTextPasswords(db);
+          }
+          if (oldVersion < 5) {
+            await _ensureRequiredTables(db);
+          }
+          if (oldVersion < 6) {
+            await _ensureRequiredTables(db);
+          }
+          if (oldVersion < 7) {
+            await _ensureRequiredTables(db);
+          }
+          if (oldVersion < 8) {
+            try {
+              await db.execute('ALTER TABLE users ADD COLUMN guardianName TEXT');
+              await db.execute('ALTER TABLE users ADD COLUMN consentAt TEXT');
+              await db.execute('ALTER TABLE users ADD COLUMN consentVersion TEXT');
+            } catch (_) {}
+          }
+          if (oldVersion < 9) {
+            await _ensureRequiredTables(db);
+          }
         },
         onOpen: (Database db) async {
-          // Garante que exista um usuário admin padrão (compatível mesmo se o DB
-          // foi criado em versões antigas ou sem o admin). Busca case-insensitive.
-          final admins = await db.query('users', where: 'LOWER(username) = ?', whereArgs: ['keinan']);
-          if (admins.isEmpty) {
-            await db.insert('users', {
-              'username': 'Keinan',
-              'password': 'keinan',
-              'fullName': 'Professor Keinan',
-              'role': 'teacher',
-              'createdAt': DateTime.now().toIso8601String(),
-            });
-          } else if ((admins.first['role'] as String?) != 'teacher') {
-            await db.update(
-              'users',
-              {
-                'role': 'teacher',
-                'fullName': 'Professor Keinan',
-              },
-              where: 'LOWER(username) = ?',
-              whereArgs: ['keinan'],
-            );
-          }
+          await _ensureRequiredTables(db);
         },
       );
     } catch (e) {
       // Provavelmente estamos em uma plataforma sem sqflite (ex: web). Marca
       // o DB como indisponível e mantém um fallback em memória.
       _dbAvailable = false;
-      // Seed admin em memória caso ainda não exista
-      final existingAdmin = _inMemoryUsers.where((u) => u.username.toLowerCase() == 'keinan').toList();
-      if (existingAdmin.isEmpty) {
-        _inMemoryUsers.add(User(
-          id: _inMemoryNextId++,
-          username: 'Keinan',
-          password: 'keinan',
-          fullName: 'Professor Keinan',
-          role: 'teacher',
-          createdAt: DateTime.now(),
-        ));
-      }
       throw Exception('DB not available on this platform: $e');
+    }
+  }
+
+  Future<void> _migratePlainTextPasswords(Database db) async {
+    try {
+      final users = await db.query('users');
+      for (final user in users) {
+        final rawPassword = (user['password'] as String?) ?? '';
+        if (rawPassword.isEmpty) continue;
+
+        if (!PasswordService.isHashed(rawPassword)) {
+          final hashed = PasswordService.hashPassword(rawPassword);
+          await db.update(
+            'users',
+            {'password': hashed},
+            where: 'id = ?',
+            whereArgs: [user['id']],
+          );
+        }
+      }
+    } catch (_) {
+      // Ignora falhas de migração em bancos legados e mantém compatibilidade.
     }
   }
 
@@ -106,6 +196,9 @@ class AppDatabase {
         pontuacao_total INTEGER DEFAULT 0,
         estrelas_total INTEGER DEFAULT 0,
         profilePhotoPath $textNullable,
+        guardianName $textNullable,
+        consentAt TEXT,
+        consentVersion $textNullable,
         createdAt TEXT NOT NULL,
         lastLogin TEXT
       )
@@ -157,6 +250,17 @@ class AppDatabase {
       )
     ''');
 
+    await db.execute('''
+      CREATE TABLE daily_mission_rewards (
+        id $idType,
+        user_id INTEGER NOT NULL,
+        reward_date $textType,
+        stars INTEGER NOT NULL,
+        UNIQUE(user_id, reward_date),
+        FOREIGN KEY (user_id) REFERENCES users (id)
+      )
+    ''');
+
     // Tabela para conquistas desbloqueadas por usuário
     await db.execute('''
       CREATE TABLE user_achievements (
@@ -182,16 +286,39 @@ class AppDatabase {
       )
     ''');
 
-    // (exercícios e status removidos — funcionalidade adiada)
+    await db.execute('''
+      CREATE TABLE quiz_question_attempts (
+        id $idType,
+        partida_id INTEGER NOT NULL,
+        usuario_id INTEGER NOT NULL,
+        materia TEXT NOT NULL,
+        ano TEXT NOT NULL,
+        topico TEXT,
+        pergunta TEXT NOT NULL,
+        resposta_selecionada TEXT NOT NULL,
+        resposta_correta TEXT NOT NULL,
+        acertou INTEGER NOT NULL DEFAULT 0,
+        ordem_pergunta INTEGER NOT NULL DEFAULT 0,
+        data_tentativa TEXT NOT NULL,
+        FOREIGN KEY (usuario_id) REFERENCES users (id),
+        FOREIGN KEY (partida_id) REFERENCES partidas (id)
+      )
+    ''');
 
-    // Inserir usuário admin padrão
-    await db.insert('users', {
-      'username': 'Keinan',
-      'password': 'keinan',
-      'fullName': 'Professor Keinan',
-      'role': 'teacher',
-      'createdAt': DateTime.now().toIso8601String(),
-    });
+    await db.execute('''
+      CREATE TABLE teacher_assignments (
+        id $idType,
+        teacherId INTEGER NOT NULL,
+        schoolId $textType,
+        grade $textType,
+        classGroup $textType,
+        shift $textType,
+        schedule $textNullable,
+        FOREIGN KEY (teacherId) REFERENCES users (id)
+      )
+    ''');
+
+    // (exercícios e status removidos — funcionalidade adiada)
   }
 
   // Exercícios: inserir
@@ -200,8 +327,10 @@ class AppDatabase {
   // Salva uma partida (similar ao DatabaseHelper.salvarPartida)
   Future<int> salvarPartida(Map<String, dynamic> partida) async {
     if (!_dbAvailable) {
-      // fallback: não persiste partidas no in-memory (poderíamos guardar em lista se necessário)
-      return -1;
+      final partidaId = _inMemoryNextPartidaId++;
+      final stored = Map<String, dynamic>.from(partida)..['id'] = partidaId;
+      _inMemoryPartidas.add(stored);
+      return stored['id'] as int;
     }
     final db = await database;
     final partidaId = await db.insert('partidas', partida);
@@ -223,6 +352,109 @@ class AppDatabase {
     } catch (_) {}
 
     return partidaId;
+  }
+
+  Future<bool> claimDailyMissionReward({
+    required int userId,
+    required DateTime date,
+    int stars = 10,
+  }) async {
+    final rewardDate = date.toIso8601String().substring(0, 10);
+    if (!_dbAvailable) {
+      final alreadyClaimed = _inMemoryDailyMissionRewards.any(
+        (reward) => reward['user_id'] == userId && reward['reward_date'] == rewardDate,
+      );
+      if (alreadyClaimed) return false;
+      _inMemoryDailyMissionRewards.add({
+        'id': _inMemoryNextDailyMissionRewardId++,
+        'user_id': userId,
+        'reward_date': rewardDate,
+        'stars': stars,
+      });
+      return true;
+    }
+
+    final db = await database;
+    try {
+      await db.insert('daily_mission_rewards', {
+        'user_id': userId,
+        'reward_date': rewardDate,
+        'stars': stars,
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<int> getDailyMissionStars(int userId) async {
+    if (!_dbAvailable) {
+      return _inMemoryDailyMissionRewards
+          .where((reward) => reward['user_id'] == userId)
+          .fold<int>(0, (total, reward) => total + (reward['stars'] as int));
+    }
+
+    final db = await database;
+    final rows = await db.rawQuery(
+      'SELECT COALESCE(SUM(stars), 0) AS total FROM daily_mission_rewards WHERE user_id = ?',
+      [userId],
+    );
+    return (rows.first['total'] as int?) ?? 0;
+  }
+
+  Future<void> salvarTentativasPartida({
+    required int usuarioId,
+    required int partidaId,
+    required String materia,
+    required String ano,
+    String? topico,
+    required List<Map<String, dynamic>> tentativas,
+  }) async {
+    if (tentativas.isEmpty) return;
+
+    if (!_dbAvailable) {
+      for (var i = 0; i < tentativas.length; i++) {
+        final tentativa = Map<String, dynamic>.from(tentativas[i]);
+        _inMemoryQuestionAttempts.add({
+          'id': _inMemoryNextAttemptId++,
+          'partida_id': partidaId,
+          'usuario_id': usuarioId,
+          'materia': materia,
+          'ano': ano,
+          'topico': topico,
+          'pergunta': tentativa['pergunta'] as String? ?? '',
+          'resposta_selecionada': tentativa['resposta_selecionada'] as String? ?? '',
+          'resposta_correta': tentativa['resposta_correta'] as String? ?? '',
+          'acertou': (tentativa['acertou'] == true) ? 1 : 0,
+          'ordem_pergunta': tentativa['ordem_pergunta'] as int? ?? i,
+          'data_tentativa': tentativa['data_tentativa'] as String? ?? DateTime.now().toIso8601String(),
+        });
+      }
+      return;
+    }
+
+    final db = await database;
+    final batch = db.batch();
+    for (var i = 0; i < tentativas.length; i++) {
+      final tentativa = tentativas[i];
+      batch.insert(
+        'quiz_question_attempts',
+        {
+          'partida_id': partidaId,
+          'usuario_id': usuarioId,
+          'materia': materia,
+          'ano': ano,
+          'topico': topico,
+          'pergunta': tentativa['pergunta'] as String? ?? '',
+          'resposta_selecionada': tentativa['resposta_selecionada'] as String? ?? '',
+          'resposta_correta': tentativa['resposta_correta'] as String? ?? '',
+          'acertou': (tentativa['acertou'] == true) ? 1 : 0,
+          'ordem_pergunta': tentativa['ordem_pergunta'] as int? ?? i,
+          'data_tentativa': tentativa['data_tentativa'] as String? ?? DateTime.now().toIso8601String(),
+        },
+      );
+    }
+    await batch.commit(noResult: true);
   }
 
   Future<Map<String, int>> _getUserTotalsFromPartidas(int userId) async {
@@ -255,7 +487,14 @@ class AppDatabase {
   }
 
   Future<List<Map<String, dynamic>>> buscarUltimasPartidas(int usuarioId, {int limit = 10}) async {
-    if (!_dbAvailable) return [];
+    if (!_dbAvailable) {
+      final partidas = _inMemoryPartidas
+          .where((partida) => partida['usuario_id'] == usuarioId)
+          .toList()
+        ..sort((a, b) => (b['data_partida'] as String? ?? '')
+            .compareTo(a['data_partida'] as String? ?? ''));
+      return partidas.take(limit).map(Map<String, dynamic>.from).toList();
+    }
     final db = await database;
     return await db.query(
       'partidas',
@@ -267,7 +506,14 @@ class AppDatabase {
   }
 
   Future<List<Map<String, dynamic>>> buscarPartidasUsuario(int usuarioId) async {
-    if (!_dbAvailable) return [];
+    if (!_dbAvailable) {
+      final partidas = _inMemoryPartidas
+          .where((partida) => partida['usuario_id'] == usuarioId)
+          .toList()
+        ..sort((a, b) => (b['data_partida'] as String? ?? '')
+            .compareTo(a['data_partida'] as String? ?? ''));
+      return partidas.map(Map<String, dynamic>.from).toList();
+    }
     final db = await database;
     return await db.query(
       'partidas',
@@ -275,6 +521,85 @@ class AppDatabase {
       whereArgs: [usuarioId],
       orderBy: 'data_partida DESC',
     );
+  }
+
+  Future<List<Map<String, dynamic>>> buscarTentativasUsuario(
+    int usuarioId, {
+    bool somenteErros = false,
+    int limit = 100,
+  }) async {
+    if (!_dbAvailable) {
+      final rows = _inMemoryQuestionAttempts.where((row) {
+        if ((row['usuario_id'] as int?) != usuarioId) return false;
+        if (somenteErros && (row['acertou'] as int?) != 0) return false;
+        return true;
+      }).toList()
+        ..sort((a, b) => (b['data_tentativa'] as String).compareTo(a['data_tentativa'] as String));
+      return rows.take(limit).map((row) => Map<String, dynamic>.from(row)).toList();
+    }
+
+    final db = await database;
+    return await db.query(
+      'quiz_question_attempts',
+      where: 'usuario_id = ?${somenteErros ? ' AND acertou = 0' : ''}',
+      whereArgs: [usuarioId],
+      orderBy: 'data_tentativa DESC, ordem_pergunta ASC',
+      limit: limit,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> buscarTentativasPorAno(
+    String ano, {
+    int limit = 200,
+  }) async {
+    if (!_dbAvailable) {
+      final rows = _inMemoryQuestionAttempts.where((row) => (row['ano'] as String? ?? '') == ano).toList()
+        ..sort((a, b) => (b['data_tentativa'] as String).compareTo(a['data_tentativa'] as String));
+      return rows.take(limit).map((row) => Map<String, dynamic>.from(row)).toList();
+    }
+
+    final db = await database;
+    return await db.query(
+      'quiz_question_attempts',
+      where: 'ano = ?',
+      whereArgs: [ano],
+      orderBy: 'data_tentativa DESC, ordem_pergunta ASC',
+      limit: limit,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> buscarTentativasErrosPorAno(String ano, {int limit = 50}) async {
+    if (!_dbAvailable) {
+      final rows = _inMemoryQuestionAttempts.where((row) => (row['ano'] as String? ?? '') == ano && (row['acertou'] as int?) == 0).toList();
+      final grouped = <String, Map<String, dynamic>>{};
+      for (final row in rows) {
+        final pergunta = row['pergunta'] as String? ?? '';
+        final entry = grouped.putIfAbsent(pergunta, () => {
+          'pergunta': pergunta,
+          'total_erros': 0,
+          'materia': row['materia'],
+          'topico': row['topico'],
+        });
+        entry['total_erros'] = (entry['total_erros'] as int) + 1;
+      }
+      final result = grouped.values.toList()
+        ..sort((a, b) => (b['total_erros'] as int).compareTo(a['total_erros'] as int));
+      return result.take(limit).toList();
+    }
+
+    final db = await database;
+    return await db.rawQuery('''
+      SELECT
+        pergunta,
+        materia,
+        topico,
+        COUNT(*) AS total_erros
+      FROM quiz_question_attempts
+      WHERE ano = ? AND acertou = 0
+      GROUP BY pergunta, materia, topico
+      ORDER BY total_erros DESC, pergunta ASC
+      LIMIT ?
+    ''', [ano, limit]);
   }
 
   Future<Map<String, dynamic>> buscarEstatisticasUsuario(int usuarioId) async {
@@ -350,14 +675,111 @@ class AppDatabase {
   }
 
   Future<List<Map<String, dynamic>>> buscarRankingGeral({int limit = 10}) async {
+    if (!_dbAvailable) {
+      final ranking = <Map<String, dynamic>>[];
+      for (final user in _inMemoryUsers.where((item) => item.role == 'student')) {
+        final partidas = _inMemoryPartidas.where((partida) => partida['usuario_id'] == user.id);
+        final pontuacao = partidas.fold<int>(
+          0,
+          (total, partida) => total + ((partida['pontuacao'] as int?) ?? 0),
+        );
+        final estrelas = partidas.fold<int>(
+          0,
+          (total, partida) => total + ((partida['estrelas'] as int?) ?? 0),
+        );
+        if (pontuacao > 0 || estrelas > 0 || partidas.isNotEmpty) {
+          ranking.add({
+            'id': user.id,
+            'nome': user.username,
+            'pontuacao_total': pontuacao,
+            'estrelas_total': estrelas + _inMemoryDailyMissionRewards
+              .where((reward) => reward['user_id'] == user.id)
+              .fold<int>(0, (total, reward) => total + (reward['stars'] as int)),
+          });
+        }
+      }
+      ranking.sort((a, b) {
+        final pontos = (b['pontuacao_total'] as int).compareTo(a['pontuacao_total'] as int);
+        return pontos != 0
+            ? pontos
+            : (b['estrelas_total'] as int).compareTo(a['estrelas_total'] as int);
+      });
+      return ranking.take(limit).toList();
+    }
+
     final db = await database;
-    return await db.query('users',
-        columns: ['id', 'username as nome', 'pontuacao_total', 'estrelas_total'],
-        orderBy: 'pontuacao_total DESC, estrelas_total DESC',
-        limit: limit);
+    return await db.rawQuery('''
+      SELECT
+        u.id,
+        u.username as nome,
+        u.pontuacao_total,
+        u.estrelas_total + COALESCE((
+          SELECT SUM(r.stars)
+          FROM daily_mission_rewards r
+          WHERE r.user_id = u.id
+        ), 0) AS estrelas_total
+      FROM users u
+      WHERE u.role = 'student'
+        AND (
+          u.pontuacao_total > 0
+          OR u.estrelas_total > 0
+          OR EXISTS (
+            SELECT 1
+            FROM daily_mission_rewards r
+            WHERE r.user_id = u.id
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM partidas p
+            WHERE p.usuario_id = u.id
+          )
+        )
+      ORDER BY u.pontuacao_total DESC, u.estrelas_total DESC
+      LIMIT ?
+    ''', [limit]);
   }
 
   Future<List<Map<String, dynamic>>> buscarRankingPorMateria(String materia, {int limit = 10}) async {
+    if (!_dbAvailable) {
+      final ranking = <Map<String, dynamic>>[];
+      for (final user in _inMemoryUsers.where((item) => item.role == 'student')) {
+        final partidas = _inMemoryPartidas.where(
+          (partida) => partida['usuario_id'] == user.id && partida['materia'] == materia,
+        ).toList();
+        if (partidas.isEmpty) continue;
+        final pontuacao = partidas.fold<int>(
+          0,
+          (total, partida) => total + ((partida['pontuacao'] as int?) ?? 0),
+        );
+        final estrelas = partidas.fold<int>(
+          0,
+          (total, partida) => total + ((partida['estrelas'] as int?) ?? 0),
+        );
+        final acertos = partidas.fold<int>(
+          0,
+          (total, partida) => total + ((partida['acertos'] as int?) ?? 0),
+        );
+        ranking.add({
+          'id': user.id,
+          'nome': user.username,
+          'nome_user': user.username,
+          'pontuacao_materia': pontuacao,
+          'estrelas_materia': estrelas,
+          'total_acertos': acertos,
+          'total_partidas': partidas.length,
+        });
+      }
+      ranking.sort((a, b) {
+        final pontos = (b['pontuacao_materia'] as int)
+            .compareTo(a['pontuacao_materia'] as int);
+        return pontos != 0
+            ? pontos
+            : (b['estrelas_materia'] as int)
+                .compareTo(a['estrelas_materia'] as int);
+      });
+      return ranking.take(limit).toList();
+    }
+
     final db = await database;
     return await db.rawQuery('''
       SELECT 
@@ -379,26 +801,98 @@ class AppDatabase {
 
   // CRUD Operations para Usuários
   Future<User> createUser(User user) async {
+    final hashedPassword = PasswordService.hashIfNeeded(user.password);
     if (!_dbAvailable) {
       final id = _inMemoryNextId++;
-      final u = user.copy(id: id, createdAt: DateTime.now());
+      final u = user.copy(id: id, password: hashedPassword, createdAt: DateTime.now());
       _inMemoryUsers.add(u);
       return u;
     }
     final db = await database;
+    final createdAt = DateTime.now();
     final id = await db.insert('users', {
       'username': user.username,
-      'password': user.password,
+      'password': hashedPassword,
       'fullName': user.fullName,
       'nickname': user.nickname,
       'grade': user.grade,
       'classGroup': user.classGroup,
       'schoolId': user.schoolId,
       'profilePhotoPath': user.profilePhotoPath,
+      'guardianName': user.guardianName,
+      'consentAt': user.consentAt?.toIso8601String(),
+      'consentVersion': user.consentVersion,
       'role': user.role,
-      'createdAt': DateTime.now().toIso8601String(),
+      'pontuacao_total': 0,
+      'estrelas_total': 0,
+      'createdAt': createdAt.toIso8601String(),
     });
-    return user.copy(id: id);
+    return user.copy(id: id, password: hashedPassword, createdAt: createdAt);
+  }
+
+  Future<TeacherAssignment> createTeacherAssignment(TeacherAssignment assignment) async {
+    if (!_dbAvailable) {
+      final created = TeacherAssignment(
+        id: _inMemoryNextTeacherAssignmentId++,
+        teacherId: assignment.teacherId,
+        schoolId: assignment.schoolId,
+        grade: assignment.grade,
+        classGroup: assignment.classGroup,
+        shift: assignment.shift,
+        schedule: assignment.schedule,
+      );
+      _inMemoryTeacherAssignments.add(created);
+      return created;
+    }
+
+    final db = await database;
+    await _ensureRequiredTables(db);
+    final id = await db.insert('teacher_assignments', assignment.toMap()..remove('id'));
+    return TeacherAssignment(
+      id: id,
+      teacherId: assignment.teacherId,
+      schoolId: assignment.schoolId,
+      grade: assignment.grade,
+      classGroup: assignment.classGroup,
+      shift: assignment.shift,
+      schedule: assignment.schedule,
+    );
+  }
+
+  Future<List<TeacherAssignment>> getTeacherAssignments(int teacherId) async {
+    if (!_dbAvailable) {
+      return _inMemoryTeacherAssignments.where((item) => item.teacherId == teacherId).toList();
+    }
+
+    final db = await database;
+    final maps = await db.query(
+      'teacher_assignments',
+      where: 'teacherId = ?',
+      whereArgs: [teacherId],
+      orderBy: 'grade ASC, classGroup ASC',
+    );
+    return maps.map(TeacherAssignment.fromMap).toList();
+  }
+
+  Future<bool> hasTeacherAccount() async {
+    if (!_dbAvailable) {
+      return _inMemoryUsers.any((u) => u.role == 'teacher');
+    }
+
+    try {
+      final db = await database;
+      final result = await db.query(
+        'users',
+        columns: ['id'],
+        where: 'role = ?',
+        whereArgs: ['teacher'],
+        limit: 1,
+      );
+      return result.isNotEmpty;
+    } catch (_) {
+      _dbAvailable = false;
+      return _inMemoryUsers.any((u) => u.role == 'teacher');
+    }
   }
 
   Future<User?> getUser(int id) async {
@@ -412,7 +906,7 @@ class AppDatabase {
     final db = await database;
     final maps = await db.query(
       'users',
-      columns: ['id', 'username', 'password', 'fullName', 'nickname', 'grade', 'classGroup', 'schoolId', 'role', 'pontuacao_total', 'estrelas_total', 'profilePhotoPath', 'createdAt', 'lastLogin'],
+      columns: ['id', 'username', 'password', 'fullName', 'nickname', 'grade', 'classGroup', 'schoolId', 'role', 'pontuacao_total', 'estrelas_total', 'profilePhotoPath', 'guardianName', 'consentAt', 'consentVersion', 'createdAt', 'lastLogin'],
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -435,7 +929,7 @@ class AppDatabase {
       final db = await database;
       final maps = await db.query(
         'users',
-        columns: ['id', 'username', 'password', 'fullName', 'nickname', 'grade', 'classGroup', 'schoolId', 'role', 'pontuacao_total', 'estrelas_total', 'profilePhotoPath', 'createdAt', 'lastLogin'],
+        columns: ['id', 'username', 'password', 'fullName', 'nickname', 'grade', 'classGroup', 'schoolId', 'role', 'pontuacao_total', 'estrelas_total', 'profilePhotoPath', 'guardianName', 'consentAt', 'consentVersion', 'createdAt', 'lastLogin'],
         // Busca case-insensitive por username
         where: 'LOWER(username) = ?',
         whereArgs: [username.toLowerCase()],

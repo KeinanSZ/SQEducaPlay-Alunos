@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import '../database/app_database.dart';
 import '../services/progresso_service.dart';
-import '../models/user_model.dart' as db_user;
-import '../user_model.dart' as legacy_user;
-import '../user_service.dart';
+import '../models/user_model.dart';
+import '../services/user_service.dart';
 import '../school_service.dart';
 import '../services/privacy_settings_service.dart';
 import '../widgets/app_bar.dart';
@@ -23,7 +22,7 @@ class _RankingTabsPageState extends State<RankingTabsPage> with SingleTickerProv
   final _progressoService = ProgressoService();
   final _userService = UserService();
   final _schoolService = SchoolService();
-  Future<List<db_user.User>> _dbUsersFuture = Future.value(const <db_user.User>[]);
+  Future<List<User>> _dbUsersFuture = Future.value(const <User>[]);
 
   String? _selectedSerie; // null = Todas
   String? _selectedSchoolId; // null = Todas
@@ -63,10 +62,10 @@ class _RankingTabsPageState extends State<RankingTabsPage> with SingleTickerProv
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<db_user.User>>(
+    return FutureBuilder<List<User>>(
       future: _dbUsersFuture,
       builder: (context, snapshot) {
-        final dbUsers = snapshot.data ?? const <db_user.User>[];
+        final dbUsers = snapshot.data ?? const <User>[];
         final series = _seriesOptions(dbUsers);
         final schools = _schoolService.getAllSchools();
         final teacherScopedRanking = _isTeacherScopedRanking();
@@ -209,7 +208,7 @@ class _RankingTabsPageState extends State<RankingTabsPage> with SingleTickerProv
     return allowed != null && allowed.isNotEmpty;
   }
 
-  List<String> _seriesOptions(List<db_user.User> users) {
+  List<String> _seriesOptions(List<User> users) {
     final set = <String>{};
     for (final u in users) {
       if (u.role == 'student' && u.grade != null) set.add(u.grade!);
@@ -234,21 +233,21 @@ class _RankingTabsPageState extends State<RankingTabsPage> with SingleTickerProv
         .replaceAll(RegExp(r'[^a-z0-9]+'), '');
   }
 
-  legacy_user.User? _currentUser() {
+  User? _currentUser() {
     if (widget.currentUsername != null) {
       return _userService.getUserByUsername(widget.currentUsername!);
     }
     return _userService.currentUser;
   }
 
-  Widget _buildRankingAlunos(List<db_user.User> dbUsers) {
+  Widget _buildRankingAlunos(List<User> dbUsers) {
     final ranking = _progressoService.getRanking();
     final filtered = <_AlunoRank>[];
     final privacy = PrivacySettingsService();
     final isStudentView = !_showFiltersForCurrentUser();
     final currentUser = _currentUser();
 
-    final Map<String, db_user.User> usersByUsername = {
+    final Map<String, User> usersByUsername = {
       for (final user in dbUsers) user.username.toLowerCase(): user,
     };
 
@@ -295,10 +294,9 @@ class _RankingTabsPageState extends State<RankingTabsPage> with SingleTickerProv
           ? (_schoolService.getSchoolById(user.schoolId!)?.name)
           : null;
       final displayName = _publicName(user.fullName, user.nickname, privacy.anonymizeStudentNames);
-      final quizPoints = prog.pontosPorMateria.values.fold<int>(0, (sum, value) => sum + value);
       filtered.add(_AlunoRank(
         username: prog.username,
-        pontos: quizPoints,
+        pontos: prog.pontuacaoTotal,
         estrelas: prog.estrelasTotal,
         quizes: prog.quizesCompletados,
         nivel: prog.nivel,
@@ -520,12 +518,12 @@ class _RankingTabsPageState extends State<RankingTabsPage> with SingleTickerProv
     );
   }
 
-  Widget _buildRankingEscolas(List<db_user.User> dbUsers) {
+  Widget _buildRankingEscolas(List<User> dbUsers) {
     final rankingAlunos = _progressoService.getRanking();
     final Map<String, int> pontosPorEscola = {};
     final Map<String, int> alunosPorEscola = {};
 
-    final Map<String, db_user.User> usersByUsername = {
+    final Map<String, User> usersByUsername = {
       for (final user in dbUsers) user.username.toLowerCase(): user,
     };
 
@@ -533,8 +531,7 @@ class _RankingTabsPageState extends State<RankingTabsPage> with SingleTickerProv
       final user = usersByUsername[prog.username.toLowerCase()];
       final schoolId = user?.schoolId;
       if (schoolId == null) continue;
-      final quizPoints = prog.pontosPorMateria.values.fold<int>(0, (sum, value) => sum + value);
-      pontosPorEscola[schoolId] = (pontosPorEscola[schoolId] ?? 0) + quizPoints;
+      pontosPorEscola[schoolId] = (pontosPorEscola[schoolId] ?? 0) + prog.pontuacaoTotal;
       alunosPorEscola[schoolId] = (alunosPorEscola[schoolId] ?? 0) + 1;
     }
 

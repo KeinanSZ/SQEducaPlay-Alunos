@@ -12,6 +12,7 @@ dependencies:
   flutter:
     sdk: flutter
   audioplayers: ^6.5.1
+  cupertino_icons: ^1.0.8
   shared_preferences: ^2.3.2
   confetti: ^0.8.0
   flutter_tts: ^4.2.3
@@ -21,7 +22,7 @@ dependencies:
   image_picker: ^1.2.2
   image_cropper: ^12.2.1
   permission_handler: ^12.0.1
-  # firebase dependencies removed (feature deferred)
+  bcrypt: ^1.1.3
 
 dev_dependencies:
   flutter_test:
@@ -41,12 +42,12 @@ flutter_launcher_icons:
   adaptive_icon_foreground: "assets/images/mascote.png"
 
 flutter_native_splash:
-  color: "#FFFFFF"
-  image: "assets/images/logo_splash.png"
+  color: "#F3F9FF"
+  image: "assets/images/logo_full.png" # Logo completa (mascote + texto)
   branding: "assets/images/mascote.png"
   android_12:
-    color: "#FFFFFF"
-    image: "assets/images/logo_splash.png"
+    image: "assets/images/logo_full.png"
+    icon_background_color: "#F3F9FF"
   web: true
   fullscreen: true
 

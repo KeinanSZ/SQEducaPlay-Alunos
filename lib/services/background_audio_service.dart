@@ -16,6 +16,28 @@ class BackgroundAudioService {
   bool _muted = false;
   bool _bgSourceSet = false;
 
+  static final AudioContext _backgroundAudioContext = AudioContext(
+    android: AudioContextAndroid(
+      contentType: AndroidContentType.music,
+      usageType: AndroidUsageType.media,
+      audioFocus: AndroidAudioFocus.none,
+    ),
+    iOS: AudioContextIOS(
+      options: {AVAudioSessionOptions.mixWithOthers},
+    ),
+  );
+
+  static final AudioContext _effectAudioContext = AudioContext(
+    android: AudioContextAndroid(
+      contentType: AndroidContentType.sonification,
+      usageType: AndroidUsageType.media,
+      audioFocus: AndroidAudioFocus.none,
+    ),
+    iOS: AudioContextIOS(
+      options: {AVAudioSessionOptions.mixWithOthers},
+    ),
+  );
+
   Future<void> init() async {
     if (_initialized) return;
   _player = AudioPlayer();
@@ -30,7 +52,7 @@ class BackgroundAudioService {
     _initialized = true;
     Logger.d('BackgroundAudioService initialized (muted=$_muted)');
     // initialize effect pools in background to reduce races
-    _initPools();
+    await _initPools();
   }
 
   bool get isPlaying => _isPlaying;
@@ -42,6 +64,7 @@ class BackgroundAudioService {
     try {
       // Try to set the source once to avoid reloading interruptions on Android.
       if (!_bgSourceSet) {
+        await _player?.setAudioContext(_backgroundAudioContext);
         try {
           await _player?.setSource(AssetSource('sounds/fundo.mp3'));
           _bgSourceSet = true;
@@ -121,13 +144,21 @@ class BackgroundAudioService {
     if (_poolsInitialized) return;
     try {
       try {
-        final p = await AudioPool.create(source: AssetSource('sounds/acerto.mp3'), maxPlayers: 3);
+        final p = await AudioPool.create(
+          source: AssetSource('sounds/acerto.mp3'),
+          maxPlayers: 3,
+          audioContext: _effectAudioContext,
+        );
         _acertoPool = p;
       } catch (e) {
         Logger.d('BackgroundAudioService: não foi possível criar acerto pool: $e');
       }
       try {
-        final p = await AudioPool.create(source: AssetSource('sounds/erro.mp3'), maxPlayers: 3);
+        final p = await AudioPool.create(
+          source: AssetSource('sounds/erro.mp3'),
+          maxPlayers: 3,
+          audioContext: _effectAudioContext,
+        );
         _erroPool = p;
       } catch (e) {
         Logger.d('BackgroundAudioService: não foi possível criar erro pool: $e');
@@ -153,6 +184,7 @@ class BackgroundAudioService {
     if (effect == 'vitoria') {
       try {
         final player = AudioPlayer();
+        await player.setAudioContext(_effectAudioContext);
         await player.setReleaseMode(ReleaseMode.stop);
         player.onPlayerComplete.listen((_) async { try { await player.dispose(); } catch (_) {} });
         await player.play(AssetSource('sounds/vitoria.mp3'));

@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
-import 'user_model.dart';
-import 'user_service.dart';
+import 'models/user_model.dart';
+import 'services/user_service.dart';
 import 'school_model.dart';
 import 'school_service.dart';
 import 'services/class_group_service.dart';
 import 'database/app_database.dart';
-import 'package:sqeducaplay/models/user_model.dart' as db_model;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'utils/logger.dart';
 import 'widgets/app_bar.dart';
@@ -26,11 +25,14 @@ class _RegisterPageState extends State<RegisterPage> {
   final _fullNameController = TextEditingController();
   final _nicknameController = TextEditingController();
   final _classGroupController = TextEditingController();
+  final _guardianNameController = TextEditingController();
   final _userService = UserService();
   final _schoolService = SchoolService();
   final _classService = ClassGroupService();
   final ImagePicker _picker = ImagePicker();
   XFile? _pickedImage;
+  bool _guardianConsent = false;
+  static const _consentVersion = '2026-08-15';
 
   final List<String> _series = ['2º Ano', '3º Ano', '4º Ano', '5º Ano'];
   String? _selectedSerie;
@@ -44,6 +46,32 @@ class _RegisterPageState extends State<RegisterPage> {
     return '$value Fundamental';
   }
 
+  Future<void> _showPrivacyTerm() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Termo de privacidade'),
+        content: const SingleChildScrollView(
+          child: Text(
+            'O SQEducaPlay usa os dados informados para criar a conta, '
+            'organizar escola, série e turma e registrar o progresso nas '
+            'atividades. A foto é opcional e pode ser removida do perfil. '
+            'Essas informações devem ser fornecidas com autorização do '
+            'responsável pelo aluno. O responsável pode solicitar a revisão '
+            'ou exclusão dos dados pelos canais oficiais da escola.',
+            style: TextStyle(height: 1.4),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Fechar'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -52,18 +80,39 @@ class _RegisterPageState extends State<RegisterPage> {
     _selectedSchool = null;
   }
 
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    _fullNameController.dispose();
+    _nicknameController.dispose();
+    _classGroupController.dispose();
+    _guardianNameController.dispose();
+    super.dispose();
+  }
+
   void _register() async {
     if (_formKey.currentState!.validate()) {
+      if (!_guardianConsent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('O responsável precisa aceitar o termo de uso dos dados.')),
+        );
+        return;
+      }
       try {
         final newUser = User(
           username: _usernameController.text,
           password: _passwordController.text,
-          fullName: _fullNameController.text,
+          fullName: _fullNameController.text.trim(),
           nickname: _nicknameController.text.trim().isEmpty ? null : _nicknameController.text.trim(),
           profilePhotoPath: _pickedImage?.path,
           grade: _canonicalGrade(_selectedSerie),
           classGroup: _resolveClassGroupName(),
           schoolId: _selectedSchool?.id,
+          guardianName: _guardianNameController.text.trim(),
+          consentAt: DateTime.now(),
+          consentVersion: _consentVersion,
+          role: 'student',
         );
         _userService.register(newUser);
 
@@ -71,19 +120,9 @@ class _RegisterPageState extends State<RegisterPage> {
         try {
           // Buscar por username no DB (case-insensitive)
           final existing = await AppDatabase.instance.getUserByUsername(_usernameController.text);
-          late db_model.User created;
+          late User created;
           if (existing == null) {
-            created = await AppDatabase.instance.createUser(db_model.User(
-              username: _usernameController.text,
-              password: _passwordController.text,
-              fullName: _fullNameController.text.trim(),
-              nickname: _nicknameController.text.trim().isEmpty ? null : _nicknameController.text.trim(),
-              grade: _canonicalGrade(_selectedSerie),
-              classGroup: _resolveClassGroupName(),
-              schoolId: _selectedSchool?.id,
-              profilePhotoPath: _pickedImage?.path,
-              role: 'student',
-            ));
+            created = await AppDatabase.instance.createUser(newUser);
             Logger.d('Usuário criado no DB com ID: ${created.id}');
           } else {
             created = existing;
@@ -336,6 +375,40 @@ class _RegisterPageState extends State<RegisterPage> {
                           });
                         },
                   validator: (value) => (value == null) ? 'Por favor, selecione uma escola.' : null,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _guardianNameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Nome do responsável',
+                    prefixIcon: Icon(Icons.family_restroom),
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Informe o nome do responsável.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _guardianConsent,
+                  onChanged: (value) => setState(() => _guardianConsent = value ?? false),
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text(
+                    'Declaro que sou responsável e autorizo o uso dos dados do aluno para fins educacionais.',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _showPrivacyTerm,
+                    icon: const Icon(Icons.policy_outlined, size: 18),
+                    label: const Text('Ler termo de privacidade'),
+                  ),
                 ),
                 const SizedBox(height: 32),
                 ElevatedButton(

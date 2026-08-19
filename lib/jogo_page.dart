@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'dart:math' as math;
+import 'dart:convert';
 import 'login_page.dart';
 import 'banco_perguntas.dart';
 import 'services/privacy_settings_service.dart';
 import 'database/app_database.dart';
-import 'services/progresso_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/background_audio_service.dart';
-import 'widgets/app_bar.dart';
+import 'services/user_service.dart';
 
 // Widget para desenhar formas geométricas
 class ShapeWidget extends StatelessWidget {
@@ -531,6 +531,82 @@ class ConfettiPainter extends CustomPainter {
   bool shouldRepaint(ConfettiPainter oldDelegate) => true;
 }
 
+class ReadingActivityWidget extends StatelessWidget {
+  final String title;
+
+  const ReadingActivityWidget({super.key, required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.orange.shade200, width: 2),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.menu_book_rounded, color: Colors.orange.shade800, size: 48),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              title,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.orange.shade900,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class WordImageWidget extends StatelessWidget {
+  final String word;
+  final IconData icon;
+  final Color color;
+
+  const WordImageWidget({
+    super.key,
+    required this.word,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 18),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.45), width: 2),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 72),
+          const SizedBox(height: 8),
+          Text(
+            word,
+            style: TextStyle(
+              color: color,
+              fontSize: 24,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class JogoPage extends StatefulWidget {
   final String ano;
   final String materia;
@@ -559,7 +635,6 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
   late AnimationController _confettiController;
   late AnimationController _starController;
   late Animation<double> _starAnimation;
-  final DateTime _inicioQuiz = DateTime.now();
 
   late List<Map<String, dynamic>> perguntas;
   final AudioPlayer _backgroundMusicPlayer = AudioPlayer();
@@ -574,6 +649,7 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
   String? _feedbackMsg; // mensagem curta de feedback
   Color _feedbackColor = Colors.transparent;
   bool _mostrarFeedback = false;
+  bool _restoringProgress = true;
   
   @override
   bool get wantKeepAlive => true;
@@ -603,9 +679,75 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
     );
     
     Future.microtask(() async {
+      await _restoreQuizProgress();
       await _initAudio();
       await _initTts();
     });
+  }
+
+  Future<String> _quizProgressKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    final username = UserService().currentUser?.username ??
+        prefs.getString('usuario_nome') ??
+        'anonimo';
+    return 'quiz_progress_${username}_${widget.ano}_${widget.materia}_${widget.topico ?? 'geral'}';
+  }
+
+  Future<void> _persistQuizProgress() async {
+    if (perguntaAtual >= perguntas.length) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = await _quizProgressKey();
+      await prefs.setString(key, jsonEncode({
+        'perguntas': perguntas,
+        'perguntaAtual': perguntaAtual,
+        'progresso': _progresso,
+        'pontuacao': pontuacao,
+        'estrelas': estrelas,
+        'acertosConsecutivos': acertosConsecutivos,
+      }));
+    } catch (_) {}
+  }
+
+  Future<void> _restoreQuizProgress() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = await _quizProgressKey();
+      final raw = prefs.getString(key);
+      if (raw == null) return;
+
+      final saved = jsonDecode(raw) as Map<String, dynamic>;
+      final savedQuestions = (saved['perguntas'] as List)
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
+      final savedProgress = (saved['progresso'] as List)
+          .map((item) => item as bool?)
+          .toList();
+      final savedIndex = saved['perguntaAtual'] as int? ?? 0;
+      if (savedQuestions.isEmpty || savedProgress.length != savedQuestions.length) return;
+
+      if (mounted) {
+        setState(() {
+          perguntas = savedQuestions;
+          perguntaAtual = savedIndex.clamp(0, savedQuestions.length - 1);
+          _progresso = savedProgress;
+          pontuacao = saved['pontuacao'] as int? ?? 0;
+          estrelas = saved['estrelas'] as int? ?? 0;
+          acertosConsecutivos = saved['acertosConsecutivos'] as int? ?? 0;
+        });
+      }
+    } catch (_) {
+      // Descarta estado local inválido e inicia um quiz novo.
+    } finally {
+      if (mounted) setState(() => _restoringProgress = false);
+    }
+  }
+
+  Future<void> _clearQuizProgress() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(await _quizProgressKey());
+    } catch (_) {}
   }
 
   Future<void> _initAudio() async {
@@ -1410,6 +1552,7 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
         _confettiController.forward();
       }
   });
+    await _persistQuizProgress();
     // Oculta o feedback após curto período
     Future.delayed(const Duration(milliseconds: 1200), () {
       if (!mounted) return;
@@ -1432,6 +1575,7 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
         acertou = false;
         _mostrarFeedback = false;
       });
+      await _persistQuizProgress();
     } else {
       // Finalizar o quiz - salvar no banco de dados
       await _salvarPartidaNoBanco();
@@ -1480,6 +1624,11 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
     // Letras do alfabeto
     if (lowerQuestion.contains('letra') || lowerQuestion.contains('alfabeto') ||
         lowerQuestion.contains('vogal') || lowerQuestion.contains('consoante')) {
+      return true;
+    }
+
+    if (lowerQuestion.contains('sílaba') || lowerQuestion.contains('silaba') ||
+        lowerQuestion.contains('palavra')) {
       return true;
     }
     
@@ -1533,8 +1682,39 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
         !lowerQuestion.contains('qual é a primeira')) {
       return _buildLetterImage(question);
     }
+
+    if (lowerQuestion.contains('sílaba') || lowerQuestion.contains('silaba') ||
+        lowerQuestion.contains('palavra')) {
+      return _buildWordImage(question);
+    }
     
     return const SizedBox.shrink();
+  }
+
+  Widget _buildWordImage(String question) {
+    final lowerQuestion = question.toLowerCase();
+    if (lowerQuestion.contains('gato')) {
+      return const WordImageWidget(
+        word: 'GATO',
+        icon: Icons.pets_rounded,
+        color: Colors.deepOrange,
+      );
+    }
+    if (lowerQuestion.contains('bola')) {
+      return const WordImageWidget(
+        word: 'BOLA',
+        icon: Icons.sports_soccer_rounded,
+        color: Colors.teal,
+      );
+    }
+    if (lowerQuestion.contains('livro')) {
+      return const WordImageWidget(
+        word: 'LIVRO',
+        icon: Icons.menu_book_rounded,
+        color: Colors.indigo,
+      );
+    }
+    return const ReadingActivityWidget(title: 'Vamos brincar com as palavras!');
   }
 
   // Constrói a imagem da forma geométrica baseada na pergunta
@@ -1701,7 +1881,6 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
     try {
       final prefs = await SharedPreferences.getInstance();
       final usuarioId = prefs.getInt('usuario_id');
-      final nomeUsuario = prefs.getString('usuario_nome');
       
       if (usuarioId == null) {
         debugPrint('Nenhum usuário logado, partida não será salva');
@@ -1719,23 +1898,18 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
         'estrelas': estrelas,
         'acertos': totalAcertos,
         'total_perguntas': perguntas.length,
-        'tempo_segundos': DateTime.now().difference(_inicioQuiz).inSeconds,
+        'tempo_segundos': null, // Pode adicionar um timer se quiser
         'data_partida': DateTime.now().toIso8601String(),
       });
 
-      if (nomeUsuario != null && nomeUsuario.trim().isNotEmpty) {
-        final tempoSegundos = DateTime.now().difference(_inicioQuiz).inSeconds;
-        await ProgressoService().registrarResultadoQuiz(
-          username: nomeUsuario,
-          materia: widget.materia,
-          pontos: pontuacao,
-          estrelas: estrelas,
-          acertos: totalAcertos,
-          erros: perguntas.length - totalAcertos,
-          perfeito: totalAcertos == perguntas.length,
-          tempoSegundos: tempoSegundos,
+      final username = UserService().currentUser?.username;
+      if (username != null && widget.topico != null) {
+        await prefs.remove(
+          'topico_em_andamento_${username}_${widget.materia}_${widget.ano}_${widget.topico}',
         );
       }
+
+      await _clearQuizProgress();
 
       debugPrint('Partida salva: $pontuacao pontos, $estrelas estrelas, $totalAcertos/${ perguntas.length} acertos');
     } catch (e) {
@@ -1746,6 +1920,12 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
   @override
   Widget build(BuildContext context) {
     super.build(context); // Necessário para o AutomaticKeepAliveClientMixin
+
+    if (_restoringProgress) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
     
     // Verifica se as perguntas foram carregadas
     if (perguntas.isEmpty) {
@@ -1771,7 +1951,10 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
           await _stopAllAudio();
         },
         child: Scaffold(
-        appBar: AppTopBar(title: '${widget.materia} - ${widget.ano}'),
+        appBar: AppBar(
+          title: Text('${widget.materia} - ${widget.ano}'),
+          backgroundColor: Colors.blue,
+        ),
         body: Stack(
           children: [
             // Fundo colorido para atrair crianças
@@ -1907,8 +2090,13 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
         await _stopAllAudio();
       },
       child: Scaffold(
-      appBar: AppTopBar(
-        title: '${widget.materia} - ${widget.ano}',
+      appBar: AppBar(
+        title: Text(
+          '${widget.materia} - ${widget.ano}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        backgroundColor: Colors.blue,
+        elevation: 4,
         actions: [
           IconButton(
             tooltip: 'Ler Pergunta',
@@ -1963,14 +2151,14 @@ class JogoPageState extends State<JogoPage> with AutomaticKeepAliveClientMixin, 
             onPressed: () async {
               try {
                 await _stopAllAudio();
-                try { await _backgroundMusicPlayer.stop(); } catch (_) {}
-                try { await _backgroundMusicPlayer.dispose(); } catch (_) {}
               } catch (_) {}
 
               if (!context.mounted) return;
               Navigator.pushAndRemoveUntil(
                 context,
-                MaterialPageRoute(builder: (context) => const LoginPage()),
+                MaterialPageRoute(
+                  builder: (context) => const LoginPage(audience: LoginAudience.student),
+                ),
                 (route) => false,
               );
             },

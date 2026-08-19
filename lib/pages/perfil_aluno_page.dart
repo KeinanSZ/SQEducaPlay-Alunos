@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/app_database.dart';
 import '../school_service.dart';
@@ -13,12 +14,20 @@ import '../services/celebration_service.dart';
 import '../services/privacy_settings_service.dart';
 import '../services/progresso_service.dart';
 import '../models/progresso_model.dart';
+import '../models/user_model.dart';
 import '../theme/design_tokens.dart';
-import '../user_model.dart';
-import '../user_service.dart';
+import '../services/user_service.dart';
 import '../widgets/app_bar.dart';
 import '../widgets/card_primary.dart';
 import '../widgets/section_header.dart';
+
+class _AvatarOption {
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  const _AvatarOption(this.label, this.icon, this.color);
+}
 
 class PerfilAlunoPage extends StatefulWidget {
   final String username;
@@ -34,12 +43,20 @@ class _PerfilAlunoPageState extends State<PerfilAlunoPage> {
   final _player = AudioPlayer();
   final _picker = ImagePicker();
   late final Future<List<Map<String, dynamic>>> _historicoFuture;
+  String? _avatarId;
 
   @override
   void initState() {
     super.initState();
     _historicoFuture = _carregarHistorico(widget.username);
+    _carregarAvatar();
     _tryCelebrate();
+  }
+
+  Future<void> _carregarAvatar() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() => _avatarId = prefs.getString('avatar_${widget.username}'));
   }
 
   @override
@@ -146,9 +163,7 @@ class _PerfilAlunoPageState extends State<PerfilAlunoPage> {
     required PrivacySettingsService privacy,
   }) {
     final conquistasBloqueadas = conquistas.values.where((c) => !c.desbloqueada).toList();
-    final progressoNivel = progresso.nivel == 'Mestre'
-        ? 1.0
-        : (progresso.pontuacaoTotal / progresso.proximoNivelPontos).clamp(0.0, 1.0);
+    final progressoNivel = (progresso.progressoNivel / 100).clamp(0.0, 1.0);
     final totalPontosJogos = progresso.pontosPorMateria.values.fold<int>(
       0,
       (int sum, int value) => sum + value,
@@ -230,7 +245,7 @@ class _PerfilAlunoPageState extends State<PerfilAlunoPage> {
                   children: [
                     _buildStatItem(
                       Icons.emoji_events,
-                      '$totalPontosJogos',
+                      '${progresso.pontuacaoTotal}',
                       'Pontos',
                       Colors.orange,
                     ),
@@ -315,7 +330,8 @@ class _PerfilAlunoPageState extends State<PerfilAlunoPage> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      '${progresso.pontuacaoTotal} / ${progresso.proximoNivelPontos}',
+                      'Nível ${progresso.nivel} • ${progresso.pontuacaoTotal} / ${progresso.proximoNivelPontos} pontos',
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     Text(
@@ -882,6 +898,11 @@ class _PerfilAlunoPageState extends State<PerfilAlunoPage> {
       }
     } catch (_) {}
 
+    final avatar = _avatarOptions[_avatarId];
+    if (avatar != null) {
+      return Icon(avatar.icon, color: avatar.color, size: 52);
+    }
+
     return Text(
       widget.username.isNotEmpty ? widget.username[0].toUpperCase() : 'U',
       style: const TextStyle(
@@ -900,6 +921,11 @@ class _PerfilAlunoPageState extends State<PerfilAlunoPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
+              leading: const Icon(Icons.face_retouching_natural),
+              title: const Text('Escolher avatar do SQEducaPlay'),
+              onTap: () => Navigator.of(context).pop('avatar'),
+            ),
+            ListTile(
               leading: const Icon(Icons.photo_library),
               title: const Text('Escolher da Galeria'),
               onTap: () => Navigator.of(context).pop('gallery'),
@@ -914,6 +940,11 @@ class _PerfilAlunoPageState extends State<PerfilAlunoPage> {
       ),
     );
     if (choice == null) return;
+
+    if (choice == 'avatar') {
+      await _chooseAvatar();
+      return;
+    }
 
     final granted = await _requestPermission(choice == 'camera' ? Permission.camera : Permission.photos);
     if (!granted) {
@@ -953,23 +984,41 @@ class _PerfilAlunoPageState extends State<PerfilAlunoPage> {
     final updated = dbUser.copy(profilePhotoPath: cropped.path);
     await AppDatabase.instance.updateUser(updated);
 
-    UserService().addUserFromDb(
-      User(
-        username: dbUser.username,
-        password: dbUser.password,
-        fullName: dbUser.fullName,
-        nickname: dbUser.nickname,
-        grade: dbUser.grade,
-        classGroup: dbUser.classGroup,
-        schoolId: dbUser.schoolId,
-        profilePhotoPath: cropped.path,
-        role: dbUser.role,
-      ),
-    );
+    // Reusa o objeto atualizado do banco (preserva id e demais campos)
+    UserService().addUserFromDb(updated);
 
     if (!mounted) return;
     setState(() {});
   }
+
+  Future<void> _chooseAvatar() async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Wrap(
+          alignment: WrapAlignment.center,
+          children: _avatarOptions.entries.map((entry) {
+            return IconButton(
+              tooltip: entry.value.label,
+              icon: Icon(entry.value.icon, color: entry.value.color, size: 42),
+              onPressed: () => Navigator.of(context).pop(entry.key),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+    if (selected == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('avatar_${widget.username}', selected);
+    if (mounted) setState(() => _avatarId = selected);
+  }
+
+  static const Map<String, _AvatarOption> _avatarOptions = {
+    'book': _AvatarOption('Livro', Icons.menu_book_rounded, Colors.deepOrange),
+    'calculator': _AvatarOption('Calculadora', Icons.calculate_rounded, Colors.teal),
+    'star': _AvatarOption('Estrela', Icons.star_rounded, Colors.amber),
+    'rocket': _AvatarOption('Foguete', Icons.rocket_launch_rounded, Colors.blue),
+  };
 
   Future<bool> _requestPermission(Permission permission) async {
     final status = await permission.request();

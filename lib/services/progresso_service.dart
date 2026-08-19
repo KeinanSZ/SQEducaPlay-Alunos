@@ -69,34 +69,38 @@ class ProgressoService {
     for (var i = 0; i < ranking.length; i++) {
       final p = ranking[i];
       final currentPos = i + 1;
+      final temParticipacaoReal = p.pontuacaoTotal > 0 || p.quizesCompletados > 0;
+
       try {
         final user = await AppDatabase.instance.getUserByUsername(p.username);
         if (user != null && user.id != null) {
           final lastPos = await AppDatabase.instance.getLastRankingPosition(user.id!);
 
-          // desbloqueia top10
-          if (currentPos <= 10) {
-            await _desbloquearSeNecessario(p.username, TipoConquista.top10);
-          }
-              // desbloqueia top3
-              if (currentPos <= 3) {
-                await _desbloquearSeNecessario(p.username, TipoConquista.top3);
-              }
+          if (temParticipacaoReal) {
+            // desbloqueia top10
+            if (currentPos <= 10) {
+              await _desbloquearSeNecessario(p.username, TipoConquista.top10);
+            }
+            // desbloqueia top3
+            if (currentPos <= 3) {
+              await _desbloquearSeNecessario(p.username, TipoConquista.top3);
+            }
 
-          // verifica subida de 10 posições
-          if (lastPos != null && (lastPos - currentPos) >= 10) {
-            await _desbloquearSeNecessario(p.username, TipoConquista.subir10posicoes);
+            // verifica subida de 10 posições
+            if (lastPos != null && (lastPos - currentPos) >= 10) {
+              await _desbloquearSeNecessario(p.username, TipoConquista.subir10posicoes);
+            }
+            if (lastPos != null && (lastPos - currentPos) >= 15) {
+              await _desbloquearSeNecessario(p.username, TipoConquista.subir15posicoes);
+            }
+            if (lastPos != null && (lastPos - currentPos) >= 20) {
+              await _desbloquearSeNecessario(p.username, TipoConquista.subir20posicoes);
+            }
+            if (lastPos != null && (currentPos - lastPos) >= 15) {
+              // caiu e depois recuperou 15 posições (recuperar15posicoes)
+              await _desbloquearSeNecessario(p.username, TipoConquista.recuperar15posicoes);
+            }
           }
-              if (lastPos != null && (lastPos - currentPos) >= 15) {
-                await _desbloquearSeNecessario(p.username, TipoConquista.subir15posicoes);
-              }
-              if (lastPos != null && (lastPos - currentPos) >= 20) {
-                await _desbloquearSeNecessario(p.username, TipoConquista.subir20posicoes);
-              }
-              if (lastPos != null && (currentPos - lastPos) >= 15) {
-                // caiu e depois recuperou 15 posições (recuperar15posicoes)
-                await _desbloquearSeNecessario(p.username, TipoConquista.recuperar15posicoes);
-              }
 
           // salva nova posição
           await AppDatabase.instance.saveUserRankingPosition(user.id!, currentPos, DateTime.now());
@@ -199,6 +203,7 @@ class ProgressoService {
 
     progresso.ultimoQuizData = ultimaData;
     progresso.quizesHoje = quizHoje;
+    progresso.diasConsecutivos = _calcularDiasConsecutivos(partidas, hoje);
     // calcula perfectsToday e consecutivePerfects a partir do histórico
     int perfectsHoje = 0;
     final partidasComData = partidas
@@ -227,6 +232,32 @@ class ProgressoService {
     progresso.perfectsToday = perfectsHoje;
     progresso.consecutivePerfects = streak;
     return teveQuizRapido;
+  }
+
+  int _calcularDiasConsecutivos(
+    List<Map<String, dynamic>> partidas,
+    DateTime hoje,
+  ) {
+    final diasEstudados = <DateTime>{};
+    for (final partida in partidas) {
+      final dataStr = partida['data_partida'] as String?;
+      final data = dataStr == null ? null : DateTime.tryParse(dataStr);
+      if (data != null) {
+        diasEstudados.add(DateTime(data.year, data.month, data.day));
+      }
+    }
+
+    var diaAtual = DateTime(hoje.year, hoje.month, hoje.day);
+    if (!diasEstudados.contains(diaAtual)) {
+      diaAtual = diaAtual.subtract(const Duration(days: 1));
+    }
+
+    var sequencia = 0;
+    while (diasEstudados.contains(diaAtual)) {
+      sequencia++;
+      diaAtual = diaAtual.subtract(const Duration(days: 1));
+    }
+    return sequencia;
   }
 
   bool _isSameDate(DateTime a, DateTime b) {
@@ -599,8 +630,16 @@ class ProgressoService {
   }
 
   List<ProgressoAluno> getRanking() {
-    final lista = _progressos.values.toList();
-    lista.sort((a, b) => b.pontuacaoTotal.compareTo(a.pontuacaoTotal));
+    final lista = _progressos.values
+        .where((progresso) => progresso.pontuacaoTotal > 0 || progresso.quizesCompletados > 0)
+        .toList();
+    lista.sort((a, b) {
+      final byPoints = b.pontuacaoTotal.compareTo(a.pontuacaoTotal);
+      if (byPoints != 0) return byPoints;
+      final byStars = b.estrelasTotal.compareTo(a.estrelasTotal);
+      if (byStars != 0) return byStars;
+      return b.quizesCompletados.compareTo(a.quizesCompletados);
+    });
     return lista;
   }
 

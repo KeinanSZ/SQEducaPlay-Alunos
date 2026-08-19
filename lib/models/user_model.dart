@@ -13,6 +13,9 @@ class User {
   final int? pontuacaoTotal;
   final int? estrelasTotal;
   final String? profilePhotoPath;
+  final String? guardianName;
+  final DateTime? consentAt;
+  final String? consentVersion;
 
   User({
     this.id,
@@ -23,12 +26,15 @@ class User {
     this.grade,
     this.classGroup,
     this.schoolId,
-    required this.role,
+    this.role = 'student',
     this.createdAt,
     this.lastLogin,
     this.pontuacaoTotal,
     this.estrelasTotal,
     this.profilePhotoPath,
+    this.guardianName,
+    this.consentAt,
+    this.consentVersion,
   });
 
   User copy({
@@ -46,6 +52,9 @@ class User {
     int? pontuacaoTotal,
     int? estrelasTotal,
     String? profilePhotoPath,
+    String? guardianName,
+    DateTime? consentAt,
+    String? consentVersion,
   }) =>
       User(
         id: id ?? this.id,
@@ -62,6 +71,9 @@ class User {
         pontuacaoTotal: pontuacaoTotal ?? this.pontuacaoTotal,
         estrelasTotal: estrelasTotal ?? this.estrelasTotal,
         profilePhotoPath: profilePhotoPath ?? this.profilePhotoPath,
+        guardianName: guardianName ?? this.guardianName,
+        consentAt: consentAt ?? this.consentAt,
+        consentVersion: consentVersion ?? this.consentVersion,
       );
 
   Map<String, dynamic> toMap() {
@@ -80,6 +92,9 @@ class User {
       'pontuacao_total': pontuacaoTotal ?? 0,
       'estrelas_total': estrelasTotal ?? 0,
       'profilePhotoPath': profilePhotoPath,
+      'guardianName': guardianName,
+      'consentAt': consentAt?.toIso8601String(),
+      'consentVersion': consentVersion,
     };
   }
 
@@ -99,6 +114,9 @@ class User {
       pontuacaoTotal: (map['pontuacao_total'] is int) ? map['pontuacao_total'] as int : ((map['pontuacao_total'] is String) ? int.tryParse(map['pontuacao_total'] as String) : 0),
       estrelasTotal: (map['estrelas_total'] is int) ? map['estrelas_total'] as int : ((map['estrelas_total'] is String) ? int.tryParse(map['estrelas_total'] as String) : 0),
       profilePhotoPath: map['profilePhotoPath'] as String?,
+      guardianName: map['guardianName'] as String?,
+      consentAt: map['consentAt'] != null ? DateTime.tryParse(map['consentAt'] as String) : null,
+      consentVersion: map['consentVersion'] as String?,
     );
   }
 }

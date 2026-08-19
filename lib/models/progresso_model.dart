@@ -77,13 +77,27 @@ class ProgressoAluno {
 
     // Atualiza contador diário e perfectsToday
     final hoje = DateTime.now();
-    if (ultimoQuizData == null ||
-        !_mesmaData(ultimoQuizData!, hoje)) {
+    final quizAnterior = ultimoQuizData;
+    if (quizAnterior == null || !_mesmaData(quizAnterior, hoje)) {
       quizesHoje = 1;
       perfectsToday = perfeito ? 1 : 0;
     } else {
       quizesHoje++;
       if (perfeito) perfectsToday++;
+    }
+
+    if (quizAnterior == null || diasConsecutivos == 0) {
+      diasConsecutivos = 1;
+    } else if (!_mesmaData(quizAnterior, hoje)) {
+      final dataAnterior = DateTime(
+        quizAnterior.year,
+        quizAnterior.month,
+        quizAnterior.day,
+      );
+      final dataAtual = DateTime(hoje.year, hoje.month, hoje.day);
+      diasConsecutivos = dataAtual.difference(dataAnterior).inDays == 1
+          ? diasConsecutivos + 1
+          : 1;
     }
     ultimoQuizData = hoje;
   }
@@ -116,20 +130,27 @@ class ProgressoAluno {
   }
 
   String get nivel {
+    if (pontuacaoTotal <= 0) return 'Novato';
+
     final levels = [
-      {'nome': 'Novato', 'limite': 150},
-      {'nome': 'Iniciante', 'limite': 350},
-      {'nome': 'Aprendiz', 'limite': 650},
-      {'nome': 'Intermediário', 'limite': 1200},
-      {'nome': 'Estudioso', 'limite': 2300},
-      {'nome': 'Expert', 'limite': 3600},
-      {'nome': 'Mestre', 'limite': double.infinity},
+      {'nome': 'Novato', 'limite': 0},
+      {'nome': 'Iniciante', 'limite': 150},
+      {'nome': 'Aprendiz', 'limite': 350},
+      {'nome': 'Intermediário', 'limite': 650},
+      {'nome': 'Estudioso', 'limite': 1200},
+      {'nome': 'Expert', 'limite': 2300},
+      {'nome': 'Mestre', 'limite': 3600},
     ];
-    for (var level in levels) {
-      final limite = level['limite'] as num;
-      if (pontuacaoTotal < limite) return level['nome'] as String;
+
+    for (int i = levels.length - 1; i >= 0; i--) {
+      final level = levels[i];
+      final limite = (level['limite'] as num).toDouble();
+      if (pontuacaoTotal >= limite) {
+        return level['nome'] as String;
+      }
     }
-    return 'Mestre';
+
+    return 'Novato';
   }
 
   int get proximoNivelPontos {

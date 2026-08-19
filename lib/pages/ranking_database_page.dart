@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../utils/logger.dart';
 import '../database/app_database.dart';
+import '../services/privacy_settings_service.dart';
 import '../widgets/app_bar.dart';
 
 class RankingDatabasePage extends StatefulWidget {
@@ -16,6 +17,7 @@ class _RankingDatabasePageState extends State<RankingDatabasePage> {
   List<Map<String, dynamic>> _rankingMatematica = [];
   bool _carregando = true;
   String _abaSelecionada = 'geral';
+  bool _anonymizeNames = true;
 
   @override
   void initState() {
@@ -27,6 +29,8 @@ class _RankingDatabasePageState extends State<RankingDatabasePage> {
     setState(() => _carregando = true);
 
     try {
+      final privacy = PrivacySettingsService();
+      await privacy.load();
   final geral = await AppDatabase.instance.buscarRankingGeral(limit: 20);
   final portugues = await AppDatabase.instance.buscarRankingPorMateria('Português', limit: 20);
   final matematica = await AppDatabase.instance.buscarRankingPorMateria('Matemática', limit: 20);
@@ -35,6 +39,7 @@ class _RankingDatabasePageState extends State<RankingDatabasePage> {
         _rankingGeral = geral;
         _rankingPortugues = portugues;
         _rankingMatematica = matematica;
+        _anonymizeNames = privacy.anonymizeStudentNames;
         _carregando = false;
       });
     } catch (e) {
@@ -184,7 +189,7 @@ class _RankingDatabasePageState extends State<RankingDatabasePage> {
   }
 
   Widget _buildRankingCard(Map<String, dynamic> item, int posicao) {
-    final nome = item['nome'] as String;
+    final nome = _formatarNome(item['nome'] as String? ?? 'Aluno');
     final pontuacao = _abaSelecionada == 'geral'
         ? (item['pontuacao_total'] as int? ?? 0)
         : (item['pontuacao_materia'] as int? ?? 0);
@@ -283,6 +288,15 @@ class _RankingDatabasePageState extends State<RankingDatabasePage> {
         ),
       ),
     );
+  }
+
+  String _formatarNome(String nome) {
+    if (!_anonymizeNames) return nome;
+
+    final partes = nome.trim().split(RegExp(r'\s+'));
+    if (partes.isEmpty || partes.first.isEmpty) return 'Aluno';
+    if (partes.length == 1) return partes.first;
+    return '${partes.first} ${partes.last[0]}.';
   }
 
   Widget _buildPosicaoWidget(int posicao, String? medalha) {

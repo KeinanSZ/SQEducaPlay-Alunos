@@ -1,11 +1,17 @@
 
 import 'package:flutter/material.dart';
+import 'models/conquista_model.dart';
+import 'models/progresso_model.dart';
+import 'models/user_model.dart';
 // Firebase removed — feature deferred
 import 'materias_page.dart';
-import 'login_page.dart';
+import 'pages/access_choice_page.dart';
 import 'pages/perfil_aluno_page.dart';
-import 'pages/ranking_tabs_page.dart';
+import 'pages/ranking_database_page.dart';
 import 'pages/privacy_settings_page.dart';
+import 'services/progresso_service.dart';
+import 'services/daily_mission_service.dart';
+import 'services/user_service.dart';
 import 'widgets/app_bar.dart';
 import 'widgets/card_primary.dart';
 import 'widgets/section_header.dart';
@@ -38,14 +44,72 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  User? _user;
+  ProgressoAluno? _progresso;
+  List<Conquista> _conquistasRecentes = [];
+  DailyMissionReward _dailyMissionReward = const DailyMissionReward(stars: 0, claimed: false);
+  int _dailyMissionStars = 0;
+  bool _isLoading = true;
+
   @override
   void initState() {
     super.initState();
-    // Exercise/Firebase listener removed — feature deferred
+    _loadUserData();
+  }
+
+  Future<void> _loadUserData() async {
+    final currentUser = UserService().currentUser;
+    if (currentUser == null) {
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (context) => const AccessChoicePage()),
+          (route) => false,
+        );
+      }
+      return;
+    }
+
+    final userProgress = ProgressoService().getProgresso(currentUser.username);
+    final dailyMissionReward = await DailyMissionService().claimIfCompleted(
+      username: currentUser.username,
+      completed: userProgress.quizesHoje >= 1,
+      userId: currentUser.id,
+    );
+    final dailyMissionStars = currentUser.id == null
+        ? 0
+        : await DailyMissionService().getTotalRewardStars(userId: currentUser.id!);
+    final conquistasDesbloqueadas = ProgressoService()
+        .getConquistas(currentUser.username)
+        .values
+        .where((c) => c.desbloqueada)
+        .toList()
+      ..sort((a, b) =>
+          (b.dataDesbloqueio ?? DateTime(0)).compareTo(a.dataDesbloqueio ?? DateTime(0)));
+
+    if (mounted) {
+      setState(() {
+        _user = currentUser;
+        _progresso = userProgress;
+        _conquistasRecentes = conquistasDesbloqueadas.take(5).toList();
+        _dailyMissionReward = dailyMissionReward;
+        _dailyMissionStars = dailyMissionStars;
+        _isLoading = false;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final pontuacao = _progresso?.pontuacaoTotal ?? 0;
+    final nivel = _progresso?.nivel ?? 'Novato';
+    final progressoBar = (_progresso?.progressoNivel ?? 0) / 100.0;
+    final xpParaProximo = _progresso == null || nivel == 'Mestre'
+        ? 0
+        : _progresso!.proximoNivelPontos - _progresso!.pontuacaoTotal;
+    final diasConsecutivos = _progresso?.diasConsecutivos ?? 0;
+    final name = _user?.fullName ?? 'Aluno';
+    final firstName = name.trim().split(RegExp(r'\s+')).first;
+
     return Scaffold(
       backgroundColor: DesignTokens.surface,
       appBar: AppTopBar(
@@ -67,7 +131,7 @@ class _HomePageState extends State<HomePage> {
             onPressed: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const RankingTabsPage()),
+                MaterialPageRoute(builder: (_) => const RankingDatabasePage()),
               );
             },
           ),
@@ -75,10 +139,11 @@ class _HomePageState extends State<HomePage> {
             icon: const Icon(Icons.person_outline),
             tooltip: 'Meu Perfil',
             onPressed: () {
+              if (_user == null) return;
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => const PerfilAlunoPage(username: 'admin'),
+                  builder: (_) => PerfilAlunoPage(username: _user!.username),
                 ),
               );
             },
@@ -87,15 +152,18 @@ class _HomePageState extends State<HomePage> {
             icon: const Icon(Icons.logout),
             tooltip: 'Sair',
             onPressed: () {
+              UserService().clearCurrentUser();
               Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (context) => const LoginPage()),
+                MaterialPageRoute(builder: (context) => const AccessChoicePage()),
                 (route) => false,
               );
             },
           ),
         ],
       ),
-      body: SingleChildScrollView(
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
         padding: const EdgeInsets.symmetric(
           horizontal: DesignTokens.spaceLG,
           vertical: DesignTokens.spaceMD,
@@ -103,9 +171,8 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 1. Bloco de Boas-vindas
             Text(
-              'Olá, Aluno! 👋',
+              'Olá, $firstName! 👋',
               style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                 fontWeight: FontWeight.bold,
                 color: DesignTokens.primary,
@@ -120,7 +187,6 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: DesignTokens.spaceLG),
 
-            // 2. Card de Progresso Principal
             Container(
               padding: const EdgeInsets.all(DesignTokens.spaceMD),
               decoration: BoxDecoration(
@@ -141,7 +207,7 @@ class _HomePageState extends State<HomePage> {
                           const Icon(Icons.star, color: Colors.amber, size: 28),
                           const SizedBox(width: DesignTokens.spaceSM),
                           Text(
-                            'Nível 5',
+                            'Nível $nivel',
                             style: Theme.of(context).textTheme.titleLarge
                                 ?.copyWith(
                                   color: Colors.white,
@@ -150,29 +216,45 @@ class _HomePageState extends State<HomePage> {
                           ),
                         ],
                       ),
-                      Text(
-                        '1.250 XP',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(
-                              color: Colors.white70,
-                              fontWeight: FontWeight.w600,
-                            ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            '$pontuacao XP',
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(
+                                  color: Colors.white70,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${diasConsecutivos}d de sequência',
+                            style: Theme.of(context).textTheme.labelMedium
+                                ?.copyWith(
+                                  color: Colors.white70,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                   const SizedBox(height: DesignTokens.spaceMD),
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: const LinearProgressIndicator(
-                      value: 0.6, // 60% de progresso
+                    borderRadius: BorderRadius.circular(DesignTokens.radiusSM),
+                    child: LinearProgressIndicator(
+                      value: progressoBar.clamp(0.0, 1.0),
                       backgroundColor: Colors.white30,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.amber),
+                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.amber),
                       minHeight: 12,
                     ),
                   ),
                   const SizedBox(height: DesignTokens.spaceSM),
                   Text(
-                    'Faltam 250 XP para o Nível 6!',
+                    nivel == 'Mestre'
+                        ? 'Você alcançou o nível máximo!'
+                        : 'Faltam $xpParaProximo XP para ${_progresso!.proximoNivelPontos}!',
                     style: Theme.of(
                       context,
                     ).textTheme.labelMedium?.copyWith(color: Colors.white),
@@ -182,7 +264,9 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: DesignTokens.spaceLG),
 
-            // 3. Escolher o Ano
+            _buildDailyMission(context),
+            const SizedBox(height: DesignTokens.spaceLG),
+
             const SectionHeader(
               title: 'Escolha o Ano Escolar',
             ),
@@ -240,23 +324,20 @@ class _HomePageState extends State<HomePage> {
 
             const SizedBox(height: DesignTokens.spaceLG),
 
-            // 4. Conquistas Recentes
             const SectionHeader(
               title: 'Últimas Conquistas',
             ),
             const SizedBox(height: DesignTokens.spaceMD),
             SizedBox(
               height: 100,
-              child: ListView(
+              child: _conquistasRecentes.isEmpty
+                  ? const Center(child: Text('Nenhuma conquista recente. Continue jogando!'))
+                  : ListView.builder(
                 scrollDirection: Axis.horizontal,
-                children: [
-                  _buildConquistaCard(
-                      context, 'Mestre da Adição', Icons.add_task, Colors.green),
-                  _buildConquistaCard(context, '3 Dias Seguidos!',
-                      Icons.local_fire_department, Colors.orange),
-                  _buildConquistaCard(
-                      context, 'Explorador', Icons.travel_explore, Colors.purple),
-                ],
+                itemCount: _conquistasRecentes.length,
+                itemBuilder: (context, index) {
+                  return _buildConquistaCard(context, _conquistasRecentes[index]);
+                },
               ),
             ),
             const SizedBox(height: DesignTokens.spaceLG),
@@ -266,29 +347,103 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildConquistaCard(
-      BuildContext context, String title, IconData icon, Color color) {
+  Widget _buildConquistaCard(BuildContext context, Conquista conquista) {
     return Container(
       width: 120,
       margin: const EdgeInsets.only(right: DesignTokens.spaceMD),
       padding: const EdgeInsets.all(DesignTokens.spaceSM),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: conquista.cor.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(DesignTokens.radiusSM),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
+        border: Border.all(color: conquista.cor.withValues(alpha: 0.3)),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, color: color, size: 28),
+          Icon(conquista.icone, color: conquista.cor, size: 28),
           const SizedBox(height: 8),
           Text(
-            title,
+            conquista.titulo,
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   fontWeight: FontWeight.bold,
-                  color: color.withValues(alpha: 0.9),
+                  color: conquista.cor.withValues(alpha: 0.9),
                 ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDailyMission(BuildContext context) {
+    final completed = (_progresso?.quizesHoje ?? 0) >= 1;
+    final missionGrade = _user?.grade ?? widget.series.first['ano'] as String;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(DesignTokens.spaceMD),
+      decoration: BoxDecoration(
+        color: completed ? Colors.green.shade50 : Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(DesignTokens.radiusLG),
+        border: Border.all(
+          color: completed ? Colors.green.shade200 : Colors.orange.shade200,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                completed ? Icons.check_circle : Icons.flag_rounded,
+                color: completed ? Colors.green.shade700 : Colors.orange.shade800,
+                size: 28,
+              ),
+              const SizedBox(width: DesignTokens.spaceSM),
+              Text(
+                'Missão de hoje',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: completed ? Colors.green.shade900 : Colors.orange.shade900,
+                    ),
+              ),
+            ],
+          ),
+          const SizedBox(height: DesignTokens.spaceSM),
+          Text(
+            completed ? 'Missão concluída! Você mandou muito bem.' : 'Complete 1 quiz de qualquer matéria',
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: Colors.black87,
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+          const SizedBox(height: DesignTokens.spaceSM),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                completed
+                    ? 'Recompensa: ${_dailyMissionReward.stars} estrelas | Estrelas de missões: $_dailyMissionStars'
+                    : 'Recompensa: reconhecimento por estudar hoje',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.black54,
+                    ),
+              ),
+              if (!completed)
+                ElevatedButton.icon(
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => MateriasPage(ano: missionGrade),
+                      ),
+                    );
+                    if (mounted) _loadUserData();
+                  },
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: const Text('Começar'),
+                ),
+            ],
           ),
         ],
       ),

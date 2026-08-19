@@ -1,13 +1,27 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
 import 'jogo_page.dart';
 import 'banco_perguntas.dart';
+import 'database/app_database.dart';
+import 'services/user_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'widgets/app_bar.dart';
 
-class TopicosPage extends StatelessWidget {
+class TopicosPage extends StatefulWidget {
   final String ano;
   final String materia;
 
   const TopicosPage({super.key, required this.ano, required this.materia});
+
+  @override
+  State<TopicosPage> createState() => _TopicosPageState();
+}
+
+class _TopicosPageState extends State<TopicosPage> {
+  final Set<String> _topicosConcluidos = {};
+  final Set<String> _topicosEmAndamento = {};
+  final Map<String, _TopicProgress> _progressoTopicos = {};
+  bool _carregandoProgresso = true;
 
   String _canonicalGrade(String grade) {
     final value = grade.trim();
@@ -15,10 +29,127 @@ class TopicosPage extends StatelessWidget {
     return '$value Fundamental';
   }
 
+  String _trailTitle(String grade, String materia) {
+    final year = grade.split('º').first;
+    return materia == 'Português'
+        ? 'Trilha das palavras - $yearº ano'
+        : 'Trilha dos números - $yearº ano';
+  }
+
+  String _trailDescription(String grade, String materia) {
+    final year = grade.split('º').first;
+    if (materia == 'Português') {
+      switch (year) {
+        case '2':
+          return 'Leia, descubra sons e forme novas palavras.';
+        case '3':
+          return 'Avance na leitura e organize suas ideias.';
+        case '4':
+          return 'Explore textos, palavras e diferentes sentidos.';
+        default:
+          return 'Interprete textos e escreva com confiança.';
+      }
+    }
+    switch (year) {
+      case '2':
+        return 'Conte, compare e resolva desafios até 100.';
+      case '3':
+        return 'Use operações para resolver desafios do dia a dia.';
+      case '4':
+        return 'Combine estratégias e descubra novas soluções.';
+      default:
+        return 'Pense como um explorador e resolva problemas.';
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _carregarProgresso();
+  }
+
+  Future<void> _carregarProgresso() async {
+    final userId = UserService().currentUser?.id;
+    final username = UserService().currentUser?.username;
+    final prefs = await SharedPreferences.getInstance();
+    final andamento = <String>{};
+    final progresso = <String, _TopicProgress>{};
+    if (username != null) {
+      for (final topico in _getTopicos()) {
+        final nome = topico['nome'] as String;
+        if (prefs.getBool(_chaveAndamento(username, nome)) ?? false) {
+          andamento.add(nome);
+        }
+        final raw = prefs.getString(_chaveProgresso(username, nome));
+        if (raw != null) {
+          try {
+            final saved = jsonDecode(raw) as Map<String, dynamic>;
+            final respostas = (saved['progresso'] as List)
+                .where((resposta) => resposta != null)
+                .length;
+            final total = (saved['progresso'] as List).length;
+            if (total > 0 && respostas > 0) {
+              progresso[nome] = _TopicProgress(respostas, total);
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    if (userId == null) {
+      if (mounted) {
+        setState(() {
+          _topicosEmAndamento.addAll(andamento);
+          _progressoTopicos.addAll(progresso);
+          _carregandoProgresso = false;
+        });
+      }
+      return;
+    }
+
+    final partidas = await AppDatabase.instance.buscarPartidasUsuario(userId);
+    final anoNormalizado = _canonicalGrade(widget.ano);
+    final concluidos = partidas
+        .where((partida) =>
+            partida['materia'] == widget.materia &&
+            partida['ano'] == anoNormalizado &&
+            (partida['topico'] as String?)?.isNotEmpty == true)
+        .map((partida) => partida['topico'] as String)
+        .toSet();
+
+    if (mounted) {
+      setState(() {
+        _topicosConcluidos.addAll(concluidos);
+        _topicosEmAndamento.addAll(andamento);
+        _topicosEmAndamento.removeAll(concluidos);
+        _progressoTopicos.addAll(progresso);
+        _carregandoProgresso = false;
+      });
+    }
+  }
+
+  String _chaveAndamento(String username, String topico) {
+    return 'topico_em_andamento_${username}_${widget.materia}_${widget.ano}_$topico';
+  }
+
+  String _chaveProgresso(String username, String topico) {
+    return 'quiz_progress_${username}_${widget.ano}_${widget.materia}_$topico';
+  }
+
+  Future<void> _marcarTopicoEmAndamento(String topico) async {
+    final username = UserService().currentUser?.username;
+    if (username == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_chaveAndamento(username, topico), true);
+    if (mounted) {
+      setState(() => _topicosEmAndamento.add(topico));
+    }
+  }
+
   // Busca os tópicos disponíveis no banco de perguntas
   List<Map<String, dynamic>> _getTopicos() {
-    final anoNormalizado = _canonicalGrade(ano);
-    final perguntas = BancoPerguntas.perguntas[materia]?[anoNormalizado];
+    final anoNormalizado = _canonicalGrade(widget.ano);
+    final perguntas = BancoPerguntas.perguntas[widget.materia]?[anoNormalizado];
     
     if (perguntas == null || perguntas.isEmpty) {
       return [];
@@ -104,7 +235,7 @@ class TopicosPage extends StatelessWidget {
     // Lista para armazenar os tópicos na ordem correta
     List<String> topicosOrdenados = [];
     
-    if (materia == 'Português') {
+    if (widget.materia == 'Português') {
       // Filtra os tópicos disponíveis na ordem BNCC
       topicosOrdenados = ordemTopicosPortugues
           .where((t) => perguntas.keys.contains(t))
@@ -118,14 +249,14 @@ class TopicosPage extends StatelessWidget {
       IconData icone = Icons.star; // ícone padrão
       
       // Seleciona ícone baseado no nome do tópico
-      if (materia == 'Matemática') {
+      if (widget.materia == 'Matemática') {
         for (var palavra in iconesMatematica.keys) {
           if (topico.toLowerCase().contains(palavra)) {
             icone = iconesMatematica[palavra]!;
             break;
           }
         }
-      } else if (materia == 'Português') {
+      } else if (widget.materia == 'Português') {
         // Usa o tópico exato para encontrar o ícone
         icone = iconesPortugues[topico] ?? Icons.star;
       }
@@ -144,10 +275,10 @@ class TopicosPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final topicos = _getTopicos();
-    final anoNormalizado = _canonicalGrade(ano);
+    final anoNormalizado = _canonicalGrade(widget.ano);
 
     return Scaffold(
-      appBar: AppTopBar(title: '$materia - $anoNormalizado'),
+      appBar: AppTopBar(title: '${widget.materia} - $anoNormalizado'),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -166,20 +297,27 @@ class TopicosPage extends StatelessWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Text(
-                  'Escolha um tópico:',
-                  style: TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                    shadows: [
-                      Shadow(
-                        offset: const Offset(0, 2),
-                        blurRadius: 4,
-                        color: Colors.black.withValues(alpha: 0.3),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _trailTitle(anoNormalizado, widget.materia),
+                      style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
                       ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _trailDescription(anoNormalizado, widget.materia),
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: Colors.white.withValues(alpha: 0.92),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
               ),
               Expanded(
@@ -195,7 +333,7 @@ class TopicosPage extends StatelessWidget {
                             ),
                             const SizedBox(height: 16),
                             Text(
-                              'Nenhum tópico disponível\npara $materia - $anoNormalizado',
+                              'Nenhum tópico disponível\npara ${widget.materia} - $anoNormalizado',
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 18,
@@ -206,24 +344,21 @@ class TopicosPage extends StatelessWidget {
                           ],
                         ),
                       )
-                    : GridView.builder(
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: MediaQuery.of(context).size.width > 600
-                          ? 3
-                          : MediaQuery.of(context).size.width > 420
-                            ? 2
-                            : 1,
-                          crossAxisSpacing: 16,
-                          mainAxisSpacing: 16,
-                        childAspectRatio: MediaQuery.of(context).size.width > 600
-                          ? 1.0
-                          : MediaQuery.of(context).size.width > 420
-                            ? 0.88
-                            : 1.8,
-                        ),
+                    : ListView.separated(
+                        padding: const EdgeInsets.only(bottom: 16),
                         itemCount: topicos.length,
+                        separatorBuilder: (context, index) => Center(
+                          child: Container(
+                            width: 4,
+                            height: 18,
+                            color: Colors.white.withValues(alpha: 0.65),
+                          ),
+                        ),
                         itemBuilder: (context, index) {
                           final topico = topicos[index];
+                          final concluido = _topicosConcluidos.contains(topico['nome']);
+                          final emAndamento = _topicosEmAndamento.contains(topico['nome']);
+                          final progresso = _progressoTopicos[topico['nome']];
                           return TweenAnimationBuilder(
                             duration: Duration(milliseconds: 300 + (index * 100)),
                             tween: Tween<double>(begin: 0, end: 1),
@@ -243,17 +378,19 @@ class TopicosPage extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(20),
                               ),
                               child: InkWell(
-                                onTap: () {
-                                  Navigator.push(
-                                    context,
+                                onTap: () async {
+                                  final navigator = Navigator.of(context);
+                                  await _marcarTopicoEmAndamento(topico['nome'] as String);
+                                  await navigator.push(
                                     MaterialPageRoute(
                                       builder: (_) => JogoPage(
                                         ano: anoNormalizado,
-                                        materia: materia,
+                                        materia: widget.materia,
                                         topico: topico['nome'],
                                       ),
                                     ),
                                   );
+                                  if (mounted) await _carregarProgresso();
                                 },
                                 borderRadius: BorderRadius.circular(20),
                                 child: Container(
@@ -272,6 +409,17 @@ class TopicosPage extends StatelessWidget {
                                   child: Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          'Etapa ${index + 1}',
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
                                       Container(
                                         padding: const EdgeInsets.all(16),
                                         decoration: BoxDecoration(
@@ -305,6 +453,8 @@ class TopicosPage extends StatelessWidget {
                                           ],
                                         ),
                                       ),
+                                      const SizedBox(height: 8),
+                                      _buildTopicStatus(concluido, emAndamento, progresso),
                                     ],
                                   ),
                                 ),
@@ -320,4 +470,81 @@ class TopicosPage extends StatelessWidget {
       ),
     );
   }
+
+    Widget _buildTopicStatus(
+      bool concluido,
+      bool emAndamento,
+      _TopicProgress? progresso,
+    ) {
+    final label = _carregandoProgresso
+        ? 'Carregando...'
+        : concluido
+            ? 'Concluído'
+        : emAndamento
+          ? 'Em andamento'
+          : 'Disponível';
+    final color = concluido
+      ? Colors.green.shade700
+      : emAndamento
+        ? Colors.orange.shade800
+        : Colors.blueGrey.shade700;
+
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                concluido
+                    ? Icons.check_circle
+                    : emAndamento
+                        ? Icons.timelapse
+                        : Icons.play_circle_outline,
+                color: color,
+                size: 16,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                progresso == null || concluido
+                    ? label
+                    : '$label: ${progresso.respondidas} de ${progresso.total}',
+                style: TextStyle(
+                  color: color,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (progresso != null && !concluido) ...[
+          const SizedBox(height: 6),
+          SizedBox(
+            width: 150,
+            child: LinearProgressIndicator(
+              value: progresso.percentual,
+              minHeight: 5,
+              backgroundColor: Colors.white54,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _TopicProgress {
+  final int respondidas;
+  final int total;
+
+  const _TopicProgress(this.respondidas, this.total);
+
+  double get percentual => (respondidas / total).clamp(0.0, 1.0);
 }

@@ -2,39 +2,52 @@ import 'package:flutter/material.dart';
 // audio managed by BackgroundAudioService
 import 'topicos_page.dart';
 import 'services/background_audio_service.dart';
-import 'login_page.dart';
+import 'pages/access_choice_page.dart';
 import 'pages/perfil_aluno_page.dart';
 import 'pages/ranking_database_page.dart';
 import 'widgets/app_bar.dart';
-import 'user_service.dart';
+import 'services/user_service.dart';
 
 class MateriasPage extends StatelessWidget {
   final String ano;
-  final String? username;
 
-  MateriasPage({super.key, required this.ano, this.username});
+  MateriasPage({super.key, required this.ano});
 
   final List<Map<String, dynamic>> materias = [
-    {'nome': 'Português', 'icone': Icons.edit, 'cor': Colors.orange},
-    {'nome': 'Matemática', 'icone': Icons.calculate, 'cor': Colors.teal},
+    {
+      'nome': 'Português',
+      'subtitulo': 'Mundo das palavras',
+      'icone': Icons.menu_book_rounded,
+      'cor': Colors.deepOrange,
+    },
+    {
+      'nome': 'Matemática',
+      'subtitulo': 'Desafio dos números',
+      'icone': Icons.calculate_rounded,
+      'cor': Colors.teal,
+    },
   ];
 
   @override
   Widget build(BuildContext context) {
-    final user = UserService().getUserByUsername(username ?? '');
-    final name = user?.fullName ?? username ?? 'Aluno';
+    // Melhoria: Utiliza o serviço de usuário (singleton) para obter o usuário logado,
+    // em vez de depender de um `username` passado por parâmetro.
+    // Isso reduz o acoplamento e centraliza a gestão da sessão, corrigindo a inconsistência de dados.
+    final user = UserService().currentUser;
+    final name = user?.fullName ?? 'Aluno';
     final firstName = name.trim().split(RegExp(r'\s+')).first;
     final titleGreeting = 'Oi, $firstName! 👋';
 
     return Scaffold(
       appBar: AppTopBar(
         title: titleGreeting,
+        showBackButton: false,
         actions: [
           _buildRoundedAction(Icons.person, 'Meu Perfil', () {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => PerfilAlunoPage(username: username ?? 'aluno'),
+                builder: (_) => PerfilAlunoPage(username: user?.username ?? 'aluno'),
               ),
             );
           }),
@@ -44,12 +57,19 @@ class MateriasPage extends StatelessWidget {
               MaterialPageRoute(builder: (_) => const RankingDatabasePage()),
             );
           }),
-          _buildRoundedAction(Icons.logout, 'Sair', () async {
-            try { await BackgroundAudioService.instance.stopForTopic(); } catch (_) {}
-            if (!context.mounted) return;
-            Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (context) => const LoginPage()), (route) => false);
-          }),
+            _buildRoundedAction(Icons.logout, 'Sair', () async {
+              // Melhoria: O erro ao parar o áudio não é mais silenciosamente ignorado.
+              // Adicionado log para diagnóstico, conforme recomendado no relatório de falhas.
+              try {
+                await BackgroundAudioService.instance.stopForTopic();
+              } catch (e, s) {
+                debugPrint('Falha ao parar o áudio no logout: $e\n$s');
+              }
+              if (!context.mounted) return;
+              UserService().clearCurrentUser();
+              Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (context) => const AccessChoicePage()), (route) => false);
+            }),
           const SizedBox(width: 8),
         ],
       ),
@@ -74,12 +94,22 @@ class MateriasPage extends StatelessWidget {
               children: [
                 // Título
                 Text(
-                  'Escolha sua matéria',
+                  'Qual aventura vamos começar?',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 28,
                     fontWeight: FontWeight.w800,
                     color: Colors.blue.shade900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  ano,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.blueGrey.shade700,
                   ),
                 ),
                 
@@ -356,6 +386,16 @@ class _SubjectCardState extends State<SubjectCard> with SingleTickerProviderStat
                       color: Colors.white,
                       fontWeight: FontWeight.w800,
                     ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  widget.materia['subtitulo'],
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.white.withValues(alpha: 0.92),
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
